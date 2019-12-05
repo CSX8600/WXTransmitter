@@ -1,31 +1,43 @@
 package com.clussmanproductions.wxradio.advisory;
 
+import java.util.LinkedList;
+import java.util.Queue;
+import java.util.Stack;
 import java.util.UUID;
+
+import com.clussmanproductions.wxradio.radio.WeatherStation;
 
 public abstract class Advisory {
 	private UUID identifier;
 	private boolean hasUpdate;
+	private Queue<Broadcast> newBroadcasts = new LinkedList<Broadcast>();
+	private Stack<Broadcast> sentBroadcasts = new Stack<Broadcast>();
+	protected WeatherStation station;
 	
-	public Advisory()
+	public Advisory(WeatherStation station)
 	{
+		this.station = station;
 		identifier = UUID.randomUUID();
 	}
 	
 	public abstract String getUnlocalizedName();
-	public abstract String getSpeechText();
-	public abstract String getDisplayText();
-	public abstract boolean isForImmediateBroadcast();
 	public abstract boolean isVoid();
 	public abstract void update();
 	
-	public boolean getHasUpdate()
+	public Broadcast getNextNewBroadcast()
 	{
-		return hasUpdate;
+		return newBroadcasts.poll();
 	}
 	
-	public void setHasUpdate(boolean hasUpdate)
+	public void markBroadcastAsSent(Broadcast broadcast)
 	{
-		this.hasUpdate = hasUpdate;
+		newBroadcasts.remove(broadcast);
+		sentBroadcasts.add(broadcast);
+	}
+	
+	protected void addBroadcast(Broadcast broadcast)
+	{
+		newBroadcasts.add(broadcast);
 	}
 	
 	public UUID getIdentifier()

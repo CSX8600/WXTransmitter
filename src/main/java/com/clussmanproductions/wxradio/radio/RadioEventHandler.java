@@ -1,32 +1,53 @@
 package com.clussmanproductions.wxradio.radio;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.UUID;
 
+import com.clussmanproductions.wxradio.WXRadio;
 import com.clussmanproductions.wxradio.advisory.Advisory;
+import com.clussmanproductions.wxradio.advisory.Broadcast;
 import com.clussmanproductions.wxradio.util.RegionalStorm;
 import com.google.common.collect.ImmutableMap;
+import com.google.gson.JsonObject;
 
-import net.minecraft.world.DimensionType;
+import CoroUtil.util.Vec3;
 import net.minecraftforge.common.DimensionManager;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.Mod.EventBusSubscriber;
+import net.minecraftforge.fml.common.event.FMLServerStartingEvent;
+import net.minecraftforge.fml.common.event.FMLServerStoppingEvent;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent.ServerTickEvent;
 import net.minecraftforge.fml.relauncher.Side;
 import weather2.ServerTickHandler;
+import weather2.util.WeatherUtilConfig;
 import weather2.weathersystem.WeatherManagerServer;
 import weather2.weathersystem.storm.StormObject;
 import weather2.weathersystem.storm.WeatherObject;
 
-@EventBusSubscriber(value = Side.SERVER)
+@EventBusSubscriber
 public class RadioEventHandler {
 	private static int sleep = 0;
+	private static int lastHeartbeat = 0;
+	
+	@SubscribeEvent
 	public static void WorldTick(ServerTickEvent e)
 	{
-		if (sleep < 5)
+		lastHeartbeat++;
+		if (lastHeartbeat >= 200)
+		{
+			JsonObject heartbeat = new JsonObject();
+			heartbeat.addProperty("type", "heartbeat");
+			WXRadio.radioThread.sendMessage(heartbeat.getAsString());
+			lastHeartbeat = 0;
+		}
+		
+		if (sleep < 20)
 		{
 			sleep++;
 			return;
@@ -34,75 +55,82 @@ public class RadioEventHandler {
 		
 		sleep = 0;
 		
-		WeatherManagerServer weatherManager = ServerTickHandler.getWeatherSystemForDim(DimensionManager.getDimensions(DimensionType.OVERWORLD)[0]);
-		if (weatherManager == null)
+		List<Integer> dimensions = WeatherUtilConfig.listDimensionsStorms;
+		
+		for(int dimensionID : dimensions)
 		{
-			return;
-		}
-		
-		//WeatherStationManager weatherStationManager = e.
-		
-		List<WeatherObject> weatherObjects = weatherManager.getStormObjects();
-		HashMap<Long, StormObject> currentStormObjects = new HashMap<Long, StormObject>();
-		
-		for(WeatherObject weatherObject : weatherObjects)
-		{
-			if (weatherObject instanceof StormObject)
+			WeatherManagerServer weatherManager = ServerTickHandler.getWeatherSystemForDim(dimensionID);
+			if (weatherManager == null)
 			{
-				currentStormObjects.put(weatherObject.ID, (StormObject)weatherObject);
-			}
-		}
-		
-		WeatherStation radioInstance = WeatherStation.getInstance();
-		
-		ImmutableMap<Long, RegionalStorm> regionalStormsByID = radioInstance.getReadOnlyCurrentRegionalStormsByID();
-		Set<Long> knownObjects = regionalStormsByID.keySet();
-		
-		Set<Long> newObjects = currentStormObjects.keySet();
-		newObjects.removeAll(knownObjects);
-		
-		Set<Long> deletedObjects = regionalStormsByID.keySet();
-		deletedObjects.removeAll(currentStormObjects.keySet());
-		
-		for(long newStormID : newObjects)
-		{
-			StormObject currentStormObject = currentStormObjects.get(newStormID);
-			RegionalStorm newRegionalStorm = new RegionalStorm(currentStormObject);
-			radioInstance.addNewRegionalStorm(newRegionalStorm);
-			
-			MinecraftForge.EVENT_BUS.post(new NewStormEvent(newRegionalStorm));
-		}
-		
-		for(long deletedStormID : deletedObjects)
-		{
-			RegionalStorm oldRegionalStorm = regionalStormsByID.get(deletedStormID);
-			MinecraftForge.EVENT_BUS.post(new RemovedStormEvent(oldRegionalStorm));
-			radioInstance.removeRegionalStorm(deletedStormID);
-		}
-		
-		ImmutableMap<UUID, Advisory> advisoriesByUUID = radioInstance.getReadOnlyAdvisories();
-		for(Entry<UUID, Advisory> advisoryEntry : advisoriesByUUID.entrySet())
-		{
-			Advisory advisory = advisoryEntry.getValue();
-			advisory.update();
-			
-			if (advisory.isVoid())
-			{
-				radioInstance.removeAdvisory(advisoryEntry.getKey());
+				return;
 			}
 			
-			if (advisory.isForImmediateBroadcast())
+			WeatherStationManager manager = WeatherStationManager.get(DimensionManager.getWorld(dimensionID));
+			
+			for(WeatherStation station : manager.getReadOnlyWeatherStationsByLocation().values())
 			{
-				// Broadcast NOW
-			}
-		}
-		
-		for(Advisory advisory : advisoriesByUUID.values())
-		{
-			if (advisory.getHasUpdate())
-			{
-				// Send update
-				advisory.setHasUpdate(false);
+				List<WeatherObject> weatherObjects = weatherManager.getStormsAround(new Vec3(station.getLocationBlockPos()), 1000);
+				HashMap<Long, StormObject> currentStormObjects = new HashMap<Long, StormObject>();
+				
+				for(WeatherObject weatherObject : weatherObjects)
+				{
+					if (weatherObject instanceof StormObject)
+					{
+						currentStormObjects.put(weatherObject.ID, (StormObject)weatherObject);
+					}
+				}
+				
+				ImmutableMap<Long, RegionalStorm> regionalStormsByID = station.getReadOnlyCurrentRegionalStormsByID();
+				Set<Long> knownObjects = new HashSet<Long>(regionalStormsByID.keySet());
+				
+				Set<Long> newObjects = new HashSet<Long>(currentStormObjects.keySet());
+				newObjects.removeAll(knownObjects);
+				
+				Set<Long> deletedObjects = new HashSet<Long>(regionalStormsByID.keySet());
+				deletedObjects.removeAll(currentStormObjects.keySet());
+				
+				for(long newStormID : newObjects)
+				{
+					StormObject currentStormObject = currentStormObjects.get(newStormID);
+					RegionalStorm newRegionalStorm = new RegionalStorm(station, currentStormObject);
+					station.addNewRegionalStorm(newRegionalStorm);
+					
+					MinecraftForge.EVENT_BUS.post(new NewStormEvent(newRegionalStorm, station));
+				}
+				
+				for(long deletedStormID : deletedObjects)
+				{
+					RegionalStorm oldRegionalStorm = regionalStormsByID.get(deletedStormID);
+					MinecraftForge.EVENT_BUS.post(new RemovedStormEvent(oldRegionalStorm));
+					station.removeRegionalStorm(deletedStormID);
+				}
+				
+				ImmutableMap<UUID, Advisory> advisoriesByUUID = station.getReadOnlyAdvisories();
+				for(Entry<UUID, Advisory> advisoryEntry : advisoriesByUUID.entrySet())
+				{
+					Advisory advisory = advisoryEntry.getValue();
+					advisory.update();
+					
+					if (advisory.isVoid())
+					{
+						station.removeAdvisory(advisoryEntry.getKey());
+					}
+				}
+				
+				for(Advisory advisory : advisoriesByUUID.values())
+				{
+					Broadcast nextBroadcast = advisory.getNextNewBroadcast();
+					
+					while(nextBroadcast != null)
+					{
+						String broadcastMessage = nextBroadcast.toJson();
+						
+						WXRadio.radioThread.sendMessage(broadcastMessage);
+						
+						advisory.markBroadcastAsSent(nextBroadcast);						
+						nextBroadcast = advisory.getNextNewBroadcast();
+					}
+				}
 			}
 		}
 	}

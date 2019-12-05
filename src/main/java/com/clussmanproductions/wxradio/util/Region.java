@@ -1,5 +1,13 @@
 package com.clussmanproductions.wxradio.util;
 
-public class Region {
-
+public enum Region {
+	Northwest,
+	North,
+	Northeast,
+	West,
+	Central,
+	East,
+	Southwest,
+	South,
+	Southeast
 }
