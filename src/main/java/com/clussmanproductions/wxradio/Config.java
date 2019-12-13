@@ -15,7 +15,7 @@ public class Config {
 		try
 		{
 			cfg.load();
-			
+			initGeneralConfig(cfg);
 		}
 		catch(Exception ex)
 		{
